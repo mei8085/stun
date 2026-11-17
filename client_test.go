@@ -388,11 +388,13 @@ func TestCallbackWaitHandler_HandleEvent(t *testing.T) {
 	c := &callbackWaitHandler{
 		cond: sync.NewCond(new(sync.Mutex)),
 	}
-	defer func() {
-		err := recover()
-		assert.NotNil(t, err, "should panic")
-	}()
-	c.HandleEvent(Event{})
+	// With no callback set the handler has already consumed its result and been
+	// released. A late duplicate terminal event must be ignored rather than
+	// panicking, so a retransmitted or duplicated response can never crash a
+	// client that already observed the transaction's single terminal result.
+	assert.NotPanics(t, func() {
+		c.HandleEvent(Event{})
+	})
 }
 
 func TestNewClientNoConnection(t *testing.T) {

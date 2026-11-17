@@ -185,6 +185,15 @@ func (a *Agent) Collect(gcTime time.Time) error {
 }
 
 // Process incoming message, synchronously passing it to handler.
+//
+// A message is only delivered when a transaction with the same ID is
+// currently registered. The matching registration is consumed atomically, so
+// a duplicate, forged or late message that arrives after the transaction
+// terminated (or after its ID was reused by a newer transaction) is ignored
+// instead of being able to start, complete or cancel a transaction it does
+// not belong to. Indications and other messages without a registered
+// transaction are still forwarded once, so a fallback handler can observe
+// data indications the agent does not manage.
 func (a *Agent) Process(m *Message) error {
 	event := Event{
 		TransactionID: m.TransactionID,
@@ -197,8 +206,21 @@ func (a *Agent) Process(m *Message) error {
 		return ErrAgentClosed
 	}
 	h := a.handler
-	delete(a.transactions, m.TransactionID)
+	_, registered := a.transactions[m.TransactionID]
+	if registered {
+		// Consume the registration only when it actually belongs to this ID,
+		// making the delivery exactly-once for that registration.
+		delete(a.transactions, m.TransactionID)
+	}
 	a.mux.Unlock()
+	if !registered {
+		// No live transaction: still surface the packet once to the handler
+		// (for example a TURN data indication), but never as a terminal event
+		// of a registered transaction.
+		h(event)
+
+		return nil
+	}
 	h(event)
 
 	return nil
@@ -220,6 +242,12 @@ func (a *Agent) SetHandler(h Handler) error {
 
 // Close terminates all transactions with ErrAgentClosed and renders Agent to
 // closed state.
+//
+// Each registered transaction receives exactly one terminal event. Handlers
+// are invoked without holding the agent mutex so they can safely re-enter the
+// agent (for example from a Client closing its transactions), and any message
+// or timeout arriving after the transactions were collected is ignored instead
+// of delivering a second event for a terminated transaction.
 func (a *Agent) Close() error {
 	e := Event{
 		Error: ErrAgentClosed,
@@ -230,14 +258,25 @@ func (a *Agent) Close() error {
 
 		return ErrAgentClosed
 	}
+	// Snapshot the pending transactions and detach them under the lock so
+	// that concurrent Process/Collect/Stop calls cannot observe them once
+	// Close has started. The handlers run after the mutex is released to
+	// avoid deadlocking on agents whose handlers re-enter the agent.
+	pending := make([]agentTransaction, 0, len(a.transactions))
 	for _, t := range a.transactions {
-		e.TransactionID = t.id
-		a.handler(e)
+		pending = append(pending, t)
 	}
 	a.transactions = nil
 	a.closed = true
+	h := a.handler
 	a.handler = nil
 	a.mux.Unlock()
+
+	// Every waiter gets exactly one terminal event.
+	for _, t := range pending {
+		e.TransactionID = t.id
+		h(e)
+	}
 
 	return nil
 }
