@@ -487,6 +487,28 @@ func (m *Message) Decode() error { //nolint:cyclop
 
 			continue
 		}
+		// RFC 8489 Section 14: only the first occurrence of a repeated
+		// attribute needs to be processed; the authentication-critical
+		// single-valued attributes are deduplicated explicitly so that
+		// forged duplicate attributes cannot confuse integrity or
+		// password-algorithm negotiation.
+		if isSingletonAuthAttribute(attr.Type) {
+			duplicate := false
+			for _, existing := range m.Attributes {
+				if existing.Type == attr.Type {
+					duplicate = true
+
+					break
+				}
+			}
+			if duplicate {
+				if m.logger != nil {
+					m.logger.Warnf("duplicate %s attribute (dropped)", attr.Type.String())
+				}
+
+				continue
+			}
+		}
 		m.Attributes = append(m.Attributes, attr)
 		if isMI {
 			seenMI = true
@@ -497,6 +519,26 @@ func (m *Message) Decode() error { //nolint:cyclop
 	}
 
 	return nil
+}
+
+// isSingletonAuthAttribute reports whether attrType is an authentication
+// attribute that is meaningful at most once per message. Per RFC 8489
+// Section 14 receivers only need to process the first occurrence of a
+// repeated attribute.
+func isSingletonAuthAttribute(attrType AttrType) bool {
+	switch attrType {
+	case AttrMessageIntegrity,
+		AttrMessageIntegritySHA256,
+		AttrUsername,
+		AttrUserhash,
+		AttrRealm,
+		AttrNonce,
+		AttrPasswordAlgorithm,
+		AttrPasswordAlgorithms:
+		return true
+	default:
+		return false
+	}
 }
 
 // Write decodes message and return error if any.

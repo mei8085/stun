@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
-// Package stun implements Session Traversal Utilities for NAT (STUN) RFC 5389.
+// Package stun implements Session Traversal Utilities for NAT (STUN),
+// RFC 5389 as obsoleted by RFC 8489, including the MESSAGE-INTEGRITY-SHA256,
+// PASSWORD-ALGORITHM(S), USERHASH attributes and the nonce-cookie bid-down
+// protection for long-term credentials.
 //
 // The stun package is intended to use by package that implements extension
 // to STUN (e.g. TURN) or client/server applications.
